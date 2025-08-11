@@ -14,16 +14,14 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, TypedDict
 
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.graph import StateGraph, END
+from langchain_community.vectorstores import Chroma
 
 
 class Configuration(TypedDict):
@@ -52,65 +50,23 @@ class RAGSystem:
     """RAG system with document loading and retrieval capabilities."""
     
     def __init__(self):
-        self.vectorstore = None
-        self.retriever = None
-        self.documents_loaded = False
-    
-    async def initialize_documents(self):
-        """Load and index documents from URLs."""
-        if self.documents_loaded:
-            return
-        
-        urls = [
-            "https://lilianweng.github.io/posts/2024-11-28-reward-hacking/",
-            "https://lilianweng.github.io/posts/2024-07-07-hallucination/",
-            "https://lilianweng.github.io/posts/2024-04-12-diffusion-video/",
-        ]
-        
-        try:
-            # Load documents
-            loader = WebBaseLoader(urls)
-            docs = await asyncio.to_thread(loader.load)
-            
-            # Split documents
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000, chunk_overlap=200
-            )
-            splits = text_splitter.split_documents(docs)
-            
-            # Create vector store
-            embeddings = OpenAIEmbeddings()
-            self.vectorstore = await asyncio.to_thread(
-                FAISS.from_documents, splits, embeddings
-            )
-            self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 4})
-            self.documents_loaded = True
-            
-        except Exception as e:
-            print(f"Error loading documents: {e}")
-            # Fallback to mock retriever for testing
-            self.retriever = None
+        pass
     
     async def retrieve_documents(self, query: str) -> List[Document]:
         """Retrieve relevant documents."""
-        if not self.documents_loaded:
-            await self.initialize_documents()
-        
-        if self.retriever:
-            try:
-                docs = await asyncio.to_thread(self.retriever.invoke, query)
-                return docs
-            except Exception as e:
-                print(f"Error during retrieval: {e}")
-                return []
-        else:
-            # Mock documents for testing
-            return [
-                Document(
-                    page_content=f"Mock document content related to: {query}",
-                    metadata={"source": "test", "title": "Test Document"}
-                )
-            ]
+        try:
+            embeddings = OpenAIEmbeddings()
+            vectorstore = await asyncio.to_thread(
+                Chroma,
+                persist_directory="./chroma_db",
+                embedding_function=embeddings
+            )
+            retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+            docs = await asyncio.to_thread(retriever.invoke, query)
+            return docs
+        except Exception as e:
+            print(f"Error during retrieval: {e}")
+            return []
 
 
 # Global RAG system instance
@@ -128,10 +84,7 @@ async def decide_retrieval(state: AgentState, config: RunnableConfig) -> Dict[st
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are an expert at deciding whether a question needs document retrieval.
         
-        Look at the question and determine if it requires specific information from documents about:
-        - Reward hacking in AI systems
-        - Hallucination in language models  
-        - Diffusion models for video generation
+        Look at the question and determine if it requires specific information from documents.
         
         Respond with exactly 'yes' if retrieval is needed, 'no' if it's a general question."""),
         ("human", "Question: {question}")

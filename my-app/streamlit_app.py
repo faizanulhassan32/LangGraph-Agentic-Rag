@@ -7,6 +7,13 @@ from typing import List, Dict
 
 import streamlit as st
 from langgraph_sdk import get_client
+import shutil
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import Chroma
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # Page configuration
 st.set_page_config(
@@ -81,7 +88,7 @@ with st.sidebar:
     # Model settings
     model = st.selectbox(
         "Model",
-        options=["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview"],
+        options=["gpt-4o-mini-2024-07-18"],
         index=0
     )
     
@@ -89,7 +96,7 @@ with st.sidebar:
         "Temperature",
         min_value=0.0,
         max_value=1.0,
-        value=0.7,
+        value=0.3,
         step=0.1
     )
     
@@ -111,15 +118,64 @@ with st.sidebar:
     
     st.markdown("---")
     
+    st.header("📁 Upload Documents")
+    uploaded_files = st.file_uploader(
+        "Choose files",
+        accept_multiple_files=True,
+        type=["pdf", "txt", "docx", "md"]
+    )
+    
+    if uploaded_files:
+        if st.button("Process Documents"):
+            with st.spinner("Processing documents..."):
+                persist_dir = "./chroma_db"
+                if os.path.exists(persist_dir):
+                    shutil.rmtree(persist_dir)
+                
+                all_splits = []
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000, chunk_overlap=200
+                )
+                
+                for uploaded_file in uploaded_files:
+                    file_path = uploaded_file.name
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    
+                    if file_path.endswith(".pdf"):
+                        from langchain_community.document_loaders import PyPDFLoader
+                        loader = PyPDFLoader(file_path)
+                    elif file_path.endswith((".txt", ".md")):
+                        from langchain_community.document_loaders import TextLoader
+                        loader = TextLoader(file_path)
+                    elif file_path.endswith(".docx"):
+                        from langchain_community.document_loaders import Docx2txtLoader
+                        loader = Docx2txtLoader(file_path)
+                    else:
+                        continue
+                    
+                    docs = loader.load()
+                    splits = text_splitter.split_documents(docs)
+                    all_splits.extend(splits)
+                    
+                    os.remove(file_path)
+                
+                if all_splits:
+                    embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"))
+                    Chroma.from_documents(
+                        all_splits, embeddings, persist_directory=persist_dir
+                    )
+                    st.success("Documents processed successfully!")
+                else:
+                    st.warning("No valid documents to process.")
+    
+    st.markdown("---")
+    
     # Information section
     st.markdown("""
     <div class="sidebar-info">
     <h4>📚 Document Sources</h4>
-    <ul>
-        <li>Reward Hacking in AI</li>
-        <li>Hallucination in LLMs</li>
-        <li>Diffusion Video Models</li>
-    </ul>
+    <p>User-uploaded files</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -264,13 +320,12 @@ with st.expander("ℹ️ How to use this chat"):
     ### Getting Started:
     1. Make sure you have set your OpenAI API key: `export OPENAI_API_KEY="your-key"`
     2. Start the LangGraph server: `langgraph dev`
-    3. Ask questions about the available topics
+    3. Upload documents in the sidebar and process them
+    4. Ask questions about the uploaded documents
     
     ### Example Questions:
-    - "What is reward hacking and why is it a problem?"
-    - "How do language models hallucinate?"
-    - "Explain diffusion models for video generation"
-    - "Compare hallucination mitigation techniques"
+    - "Summarize the main points"
+    - "What does the document say about X?"
     
     ### Agent Features:
     - **Smart Retrieval**: Decides when to search documents vs. answer directly
